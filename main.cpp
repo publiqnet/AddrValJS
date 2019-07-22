@@ -7,6 +7,7 @@ namespace CryptoPP
 #endif
 
 #include <cryptopp/aes.h>
+#include <cryptopp/crc.h>
 #include <cryptopp/filters.h>
 #include <cryptopp/hex.h>
 #include <cryptopp/keccak.h>
@@ -51,13 +52,12 @@ static void kck256(buf32 ret, unsigned char *data, uint32_t sz)
     _kck256.CalculateDigest(ret, data, sz);
 }
 
-CryptoPP::Integer _from_base58(std::string const & b58_str)
+CryptoPP::Integer _from_base(std::string const & str, std::string const & alphabet)
 {
-    std::string alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     size_t b = alphabet.length();
 
     CryptoPP::Integer res = 0, e = 1;
-    for(auto it = b58_str.rbegin(); it != b58_str.rend(); ++it)
+    for(auto it = str.rbegin(); it != str.rend(); ++it)
     {
         auto i = alphabet.find_first_of(*it);
         res += i*e;
@@ -67,13 +67,34 @@ CryptoPP::Integer _from_base58(std::string const & b58_str)
     return res;
 }
 
-std::vector<unsigned char> from_base58(std::string const & b58_str)
+std::vector<unsigned char> from_base58(std::string const & b58_str, std::string const & alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 {
-    auto res = _from_base58(b58_str);
+    auto res = _from_base(b58_str, alphabet);
     std::vector<unsigned char> buf(res.ByteCount());
 
     res.Encode(&buf[0], buf.size());
     return buf;
+}
+
+std::vector<unsigned char> from_base32(std::string const & b32_str, std::string const & alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+{
+    auto res = _from_base(b32_str, alphabet);
+    std::vector<unsigned char> buf(res.ByteCount());
+
+    res.Encode(&buf[0], buf.size());
+    return buf;
+}
+
+template <typename T>
+void prepad(std::vector<T> &vch, size_t final_size)
+{
+    auto sz = vch.size( );
+    if(sz < final_size)
+    {
+        vch.resize(final_size);
+        std::move(vch.begin( ), vch.begin( ) + sz, vch.begin( ) + final_size - sz);
+        std::fill(vch.begin( ), vch.begin( ) + final_size - sz, 0);
+    }
 }
 
 template <typename HASH, uint8_t chk_sz = 4>
@@ -178,13 +199,7 @@ bool validate_BTC(std::string addr)
     uint8_t chk_sz = 4;
     auto    vch    = from_base58(addr);
 
-    auto sz = vch.size( );
-    if(sz < 1 + 20 + chk_sz)
-    {
-        vch.resize(1 + 20 + chk_sz);
-        std::move(vch.begin( ), vch.begin( ) + sz, vch.begin( ) + vch.size( ) - sz);
-        std::fill(vch.begin( ), vch.begin( ) + vch.size( ) - sz, 0);
-    }
+    prepad(vch, 1 + 20 + chk_sz);
 
     switch(vch[0])
     {
@@ -206,6 +221,106 @@ bool validate_BTC(std::string addr)
     return false;
 }
 
+bool validate_XRP(std::string addr)
+{
+    uint8_t chk_sz = 4;
+    auto    vch    = from_base58(addr, "rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz");
+
+    prepad(vch, 1 + 20 + chk_sz);
+
+    switch(vch[0])
+    {
+    case 0:
+    case 5:
+    {
+        std::string result(vch.begin( ), vch.end( ) - chk_sz);
+        std::string chk_str_(vch.end( ) - chk_sz, vch.end( ));
+
+        buf32 chk_str, chk_str__;
+        sha256(chk_str__, (unsigned char *) result.data( ), result.size( ));
+        sha256(chk_str, chk_str__, sizeof(chk_str__));
+
+        if(0 == memcmp(chk_str, chk_str_.data( ), chk_sz))
+            return true;
+    }
+    }
+
+    return false;
+}
+
+/* Calculating XMODEM CRC-16 in 'C'
+   ================================
+   Reference model for the translated code */
+
+/* On entry, addr=>start of data
+             num = length of data
+             crc = incoming CRC     */
+int crc16(unsigned char *addr, int num, int crc)
+{
+    static const int poly = 0x1021;
+    int i;
+
+    for(; num > 0; num--) /* Step through bytes in memory */
+    {
+        crc = crc ^ (*addr++ << 8); /* Fetch byte from memory, XOR into CRC top byte*/
+        for(i = 0; i < 8; i++)      /* Prepare to rotate 8 bits */
+        {
+            crc = crc << 1;                  /* rotate */
+            if(crc & 0x10000)                /* bit 15 was set (now bit 16)... */
+                crc = (crc ^ poly) & 0xFFFF; /* XOR with XMODEM polynomic */
+                                             /* and ensure CRC remains 16-bit value */
+        }                                    /* Loop for 8 bits */
+    }                                        /* Loop until num=0 */
+    return (crc);                            /* Return updated CRC */
+}
+
+bool validate_XLM(std::string addr)
+{
+    uint8_t chk_sz = 2;
+    auto    vch    = from_base32(addr);
+
+    auto sz = vch.size( );
+    if(sz != 1 + 32 + chk_sz)
+        return false;
+
+    switch(vch[0])
+    {
+        case 6 << 3:  // G
+        case 18 << 3: // S
+        {
+            auto        crc = crc16(vch.data( ), 33, 0);
+            std::string chk_str_(vch.end( ) - chk_sz, vch.end( ));
+
+            if(0 == memcmp(&crc, chk_str_.data( ), chk_sz))
+                return true;
+        }
+    }
+
+    return false;
+}
+
+bool validate_ADA(std::string addr)
+{
+    auto    vch    = from_base58(addr);
+
+    if (vch[0] != 0x82)
+        return false;
+    if (vch[1] != 0xD8)
+        return false;
+    if (vch[2] != 0x18)
+        return false;
+    if (vch[3] != 0x58)
+        return false;
+
+    size_t sz = vch[4];
+
+    std::string pk((char*)&vch[5], sz);
+    std::string chk(vch.rbegin(), vch.rbegin() + 4);
+
+    CryptoPP::CRC32 crc32;
+
+    return crc32.VerifyDigest((CryptoPP::byte *)chk.data(), (CryptoPP::byte *) pk.data( ), pk.size( ));
+}
 
 
 static std::vector<unsigned char> from_hex(std::string const &x_str)
@@ -302,6 +417,9 @@ int main()
     std::cout<<validate_BTC("3EktnHQD7RiAE6uzMj2ZifT9YgRrkSgzQX")<<std::endl;
     std::cout<<validate_CVA("CVA6y5UDn3dkNrkzz5NUtbCZFE3ohUS6xrXGJrz8iFrUGb232E6hf")<<std::endl;
     std::cout<<validate_CVA("CVA6SK6R4CP1yKoD2PQNq99y9v4JiVfXoamv3ZM281bZWo9iCZbLc_84ENZXQRFZtA5pP7SvguYe964MBcahB3EA9FoMWor4KyYTrH73")<<std::endl;
+    std::cout<<validate_XRP("rEKK4fJ7c7Ezb2EdeWTx6k7YKgx3cVgdy1")<<std::endl;
+    std::cout<<validate_XLM("GBWNUFHS3AS4SMGFOIYPSXETSK6NBQ4SCLQOVOPJOKYVRL3L3OJMCP23")<<std::endl;
+    std::cout<<validate_ADA("DdzFFzCqrht1FSo7xtWiayH6XRVgqAYH3SXqjEy5CNuQsrYky94pKRkLQRqYZPBRmkaXyJqT2cqkbnwHZJ4GeFRgi8RNPPcRYPPCs5Qy")<<std::endl;
 
     return 0;
 }
@@ -316,5 +434,8 @@ EMSCRIPTEN_BINDINGS(addrvaljs)
     function("validate_PBQ", &validate_PBQ);
     function("validate_ETH", &validate_ETH);
     function("validate_BTC", &validate_BTC);
+    function("validate_XRP", &validate_XRP);
+    function("validate_XLM", &validate_XLM);
+    function("validate_ADA", &validate_ADA);
 };
 #endif
