@@ -322,6 +322,60 @@ bool validate_ADA(std::string addr)
     return crc32.VerifyDigest((CryptoPP::byte *)chk.data(), (CryptoPP::byte *) pk.data( ), pk.size( ));
 }
 
+bool validate_LTC(std::string addr)
+{
+    uint8_t chk_sz = 4;
+    auto    vch    = from_base58(addr);
+
+    prepad(vch, 1 + 20 + chk_sz);
+
+    switch(vch[0])
+    {
+    case 0x30:
+    case 0x32:
+    case 0x05:
+    {
+        std::string result(vch.begin( ), vch.end( ) - chk_sz);
+        std::string chk_str_(vch.end( ) - chk_sz, vch.end( ));
+
+        buf32 chk_str, chk_str__;
+        sha256(chk_str__, (unsigned char *) result.data( ), result.size( ));
+        sha256(chk_str, chk_str__, sizeof(chk_str__));
+
+        if(0 == memcmp(chk_str, chk_str_.data( ), chk_sz))
+            return true;
+    }
+    }
+
+    return false;
+}
+
+bool validate_MONA(std::string addr)
+{
+    uint8_t chk_sz = 4;
+    auto    vch    = from_base58(addr);
+
+    prepad(vch, 1 + 20 + chk_sz);
+
+    switch(vch[0])
+    {
+    case 0x37:
+    case 0x32:
+    {
+        std::string result(vch.begin( ), vch.end( ) - chk_sz);
+        std::string chk_str_(vch.end( ) - chk_sz, vch.end( ));
+
+        buf32 chk_str, chk_str__;
+        sha256(chk_str__, (unsigned char *) result.data( ), result.size( ));
+        sha256(chk_str, chk_str__, sizeof(chk_str__));
+
+        if(0 == memcmp(chk_str, chk_str_.data( ), chk_sz))
+            return true;
+    }
+    }
+
+    return false;
+}
 
 static std::vector<unsigned char> from_hex(std::string const &x_str)
 {
@@ -420,7 +474,8 @@ int main()
     std::cout<<validate_XRP("rEKK4fJ7c7Ezb2EdeWTx6k7YKgx3cVgdy1")<<std::endl;
     std::cout<<validate_XLM("GBWNUFHS3AS4SMGFOIYPSXETSK6NBQ4SCLQOVOPJOKYVRL3L3OJMCP23")<<std::endl;
     std::cout<<validate_ADA("DdzFFzCqrht1FSo7xtWiayH6XRVgqAYH3SXqjEy5CNuQsrYky94pKRkLQRqYZPBRmkaXyJqT2cqkbnwHZJ4GeFRgi8RNPPcRYPPCs5Qy")<<std::endl;
-
+    std::cout<<validate_LTC("MCJC3qfepveUM4kgR2b8soB6yRWkfUjK1T")<<std::endl;
+    std::cout<<validate_MONA("PBaBLcoLXzuzscomEPcZhx3ZyV8RitpaHG")<<std::endl;
     return 0;
 }
 #else
@@ -437,5 +492,7 @@ EMSCRIPTEN_BINDINGS(addrvaljs)
     function("validate_XRP", &validate_XRP);
     function("validate_XLM", &validate_XLM);
     function("validate_ADA", &validate_ADA);
+    function("validate_LTC", &validate_LTC);
+    function("validate_MONA", &validate_MONA);
 };
 #endif
