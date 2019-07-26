@@ -67,23 +67,26 @@ CryptoPP::Integer _from_base(std::string const & str, std::string const & alphab
     return res;
 }
 
+std::vector<unsigned char> i_to_v(CryptoPP::Integer const &i)
+{
+    std::vector<unsigned char> v(i.ByteCount());
+    i.Encode(&v[0], v.size());
+    return v;
+}
+
 std::vector<unsigned char> from_base58(std::string const & b58_str, std::string const & alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 {
     auto res = _from_base(b58_str, alphabet);
-    std::vector<unsigned char> buf(res.ByteCount());
-
-    res.Encode(&buf[0], buf.size());
-    return buf;
+    return i_to_v(res);
 }
 
 std::vector<unsigned char> from_base32(std::string const & b32_str, std::string const & alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
 {
     auto res = _from_base(b32_str, alphabet);
-    std::vector<unsigned char> buf(res.ByteCount());
-
-    res.Encode(&buf[0], buf.size());
-    return buf;
+    return i_to_v(res);
 }
+
+
 
 template <typename T>
 void prepad(std::vector<T> &vch, size_t final_size)
@@ -377,6 +380,60 @@ bool validate_MONA(std::string addr)
     return false;
 }
 
+uint64_t PolyMod(std::vector<uint8_t> v)
+{
+    uint64_t c = 1;
+    for(uint8_t d : v)
+    {
+        uint8_t c0 = c >> 35;
+        c          = ((c & 0x07ffffffff) << 5) ^ d;
+
+        if(c0 & 0x01)
+            c ^= 0x98f2bc8e61;
+        if(c0 & 0x02)
+            c ^= 0x79b76d99e2;
+        if(c0 & 0x04)
+            c ^= 0xf33e5fb3c4;
+        if(c0 & 0x08)
+            c ^= 0xae2eabe2a8;
+        if(c0 & 0x10)
+            c ^= 0x1e4f43e470;
+    }
+
+    return c ^ 1;
+}
+
+bool validate_BCH(std::string addr)
+{
+    std::string alphabet = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+    for(int i = 0;; ++i)
+    {
+        if(addr[i] == ':')
+        {
+            addr[i] = alphabet[0];
+            break;
+        }
+
+        auto c  = addr[i] & 0x1f;
+        addr[i] = alphabet[c];
+    }
+    std::vector<uint8_t> _addr;
+    for(auto i : addr)
+        _addr.push_back(alphabet.find(i));
+
+
+    std::vector<uint8_t> _chk(_addr.rbegin( ), _addr.rbegin( ) + 8);
+    std::fill(_addr.end( ) - 8, _addr.end( ), 0);
+    auto chk = PolyMod(_addr);
+
+    std::vector<uint8_t> __chk;
+    for(uint8_t i = 0; i < sizeof(chk); ++i, chk >>= 5)
+        __chk.push_back(chk & 0x1f);
+
+    return std::equal(__chk.begin( ), __chk.end( ), _chk.begin( ));
+}
+
+
 static std::vector<unsigned char> from_hex(std::string const &x_str)
 {
     CryptoPP::HexDecoder _xdec;
@@ -476,6 +533,7 @@ int main()
     std::cout<<validate_ADA("DdzFFzCqrht1FSo7xtWiayH6XRVgqAYH3SXqjEy5CNuQsrYky94pKRkLQRqYZPBRmkaXyJqT2cqkbnwHZJ4GeFRgi8RNPPcRYPPCs5Qy")<<std::endl;
     std::cout<<validate_LTC("MCJC3qfepveUM4kgR2b8soB6yRWkfUjK1T")<<std::endl;
     std::cout<<validate_MONA("PBaBLcoLXzuzscomEPcZhx3ZyV8RitpaHG")<<std::endl;
+    std::cout<<validate_BCH("bitcoincash:qzan3nugwswej75myck62u6anmppu4fxvu7pnz6ad8")<<std::endl;
     return 0;
 }
 #else
@@ -494,5 +552,6 @@ EMSCRIPTEN_BINDINGS(addrvaljs)
     function("validate_ADA", &validate_ADA);
     function("validate_LTC", &validate_LTC);
     function("validate_MONA", &validate_MONA);
+    function("validate_BCH", &validate_BCH);
 };
 #endif
